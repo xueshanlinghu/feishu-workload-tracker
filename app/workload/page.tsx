@@ -10,7 +10,7 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import WorkloadSelector from './WorkloadSelector';
 import EditRecordModal from './EditRecordModal';
@@ -56,7 +56,7 @@ export default function WorkloadPage() {
 }
 
 function WorkloadPageContent() {
-  const toast = useToast();
+  const { showError, showSuccess } = useToast();
   const router = useRouter();
 
   // 状态
@@ -156,6 +156,40 @@ function WorkloadPageContent() {
     };
   }, [currentUser, router]);
 
+  const refreshRecords = useCallback(async () => {
+    if (!selectedDate || !selectedPerson) return;
+
+    try {
+      setIsFetchingRecords(true);
+
+      const res = await fetch(
+        `/api/feishu/records?date=${selectedDate}&person=${selectedPerson}`
+      );
+
+      if (res.status === 401) {
+        console.log('Session expired while fetching records, redirecting to login...');
+        router.push('/login');
+        return;
+      }
+
+      if (res.ok) {
+        const data = await res.json();
+        setExistingRecords(data.records);
+        setExistingTotal(data.total);
+      } else {
+        setExistingRecords([]);
+        setExistingTotal(0);
+      }
+    } catch (err) {
+      console.error('Failed to fetch records:', err);
+      setExistingRecords([]);
+      setExistingTotal(0);
+      showError('获取已有记录失败');
+    } finally {
+      setIsFetchingRecords(false);
+    }
+  }, [selectedDate, selectedPerson, router, showError]);
+
   // 获取用户列表和事项选项
   useEffect(() => {
     async function fetchInitialData() {
@@ -185,53 +219,20 @@ function WorkloadPageContent() {
         }
       } catch (err) {
         console.error('Failed to fetch initial data:', err);
-        toast.showError('获取初始数据失败');
+        showError('获取初始数据失败');
       } finally {
         setIsLoading(false);
       }
     }
 
     fetchInitialData();
-  }, [router, toast]);
+  }, [router, showError]);
 
   // 当日期或人员变化时，获取已有记录
   useEffect(() => {
     if (!selectedDate || !selectedPerson) return;
-
-    async function fetchRecords() {
-      try {
-        setIsFetchingRecords(true);
-
-        const res = await fetch(
-          `/api/feishu/records?date=${selectedDate}&person=${selectedPerson}`
-        );
-
-        // 检查会话是否过期
-        if (res.status === 401) {
-          console.log('Session expired while fetching records, redirecting to login...');
-          router.push('/login');
-          return;
-        }
-
-        if (res.ok) {
-          const data = await res.json();
-          setExistingRecords(data.records);
-          setExistingTotal(data.total);
-        } else {
-          setExistingRecords([]);
-          setExistingTotal(0);
-        }
-      } catch (err) {
-        console.error('Failed to fetch records:', err);
-        setExistingRecords([]);
-        setExistingTotal(0);
-      } finally {
-        setIsFetchingRecords(false);
-      }
-    }
-
-    fetchRecords();
-  }, [selectedDate, selectedPerson, router]);
+    void refreshRecords();
+  }, [selectedDate, selectedPerson, refreshRecords]);
 
   // 添加新记录行
   const addNewRecord = () => {
@@ -278,17 +279,17 @@ function WorkloadPageContent() {
 
       // 验证
       if (newRecords.length === 0) {
-        toast.showError('请至少添加一条记录');
+        showError('请至少添加一条记录');
         return;
       }
 
       if (newRecords.some(r => !r.task)) {
-        toast.showError('请填写所有事项');
+        showError('请填写所有事项');
         return;
       }
 
       if (finalTotal > 1.0) {
-        toast.showError('总人力占用不能超过1.0');
+        showError('总人力占用不能超过1.0');
         return;
       }
 
@@ -322,31 +323,11 @@ function WorkloadPageContent() {
         throw new Error(data.error || '提交失败');
       }
 
-      toast.showSuccess('记录提交成功！');
+      showSuccess('记录提交成功！');
       setNewRecords([]);
-
-      // 刷新已有记录
-      setIsFetchingRecords(true);
-      const refreshRes = await fetch(
-        `/api/feishu/records?date=${selectedDate}&person=${selectedPerson}`
-      );
-
-      // 检查刷新请求的会话状态
-      if (refreshRes.status === 401) {
-        console.log('Session expired while refreshing, redirecting to login...');
-        setIsFetchingRecords(false);
-        router.push('/login');
-        return;
-      }
-
-      if (refreshRes.ok) {
-        const data = await refreshRes.json();
-        setExistingRecords(data.records);
-        setExistingTotal(data.total);
-      }
-      setIsFetchingRecords(false);
+      await refreshRecords();
     } catch (err: unknown) {
-      toast.showError(err instanceof Error ? err.message : '提交失败');
+      showError(err instanceof Error ? err.message : '提交失败');
       setIsFetchingRecords(false);
     } finally {
       setIsSubmitting(false);
@@ -377,34 +358,16 @@ function WorkloadPageContent() {
 
   // 编辑成功
   const handleEditSuccess = async () => {
-    toast.showSuccess('记录更新成功！');
+    showSuccess('记录更新成功！');
 
     // 等待飞书服务器同步数据（延迟2秒）
     await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // 刷新已有记录
-    setIsFetchingRecords(true);
-    const refreshRes = await fetch(
-      `/api/feishu/records?date=${selectedDate}&person=${selectedPerson}`
-    );
-
-    if (refreshRes.status === 401) {
-      setIsFetchingRecords(false);
-      router.push('/login');
-      return;
-    }
-
-    if (refreshRes.ok) {
-      const data = await refreshRes.json();
-      setExistingRecords(data.records);
-      setExistingTotal(data.total);
-    }
-    setIsFetchingRecords(false);
+    await refreshRecords();
   };
 
   // 编辑失败
   const handleEditError = (errorMessage: string) => {
-    toast.showError(errorMessage);
+    showError(errorMessage);
   };
 
   // 打开删除确认弹窗
@@ -441,32 +404,14 @@ function WorkloadPageContent() {
         throw new Error(data.error || '删除失败');
       }
 
-      toast.showSuccess('记录删除成功！');
+      showSuccess('记录删除成功！');
       closeDeleteModal();
 
       // 等待飞书服务器同步数据（延迟2秒）
       await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // 刷新已有记录
-      setIsFetchingRecords(true);
-      const refreshRes = await fetch(
-        `/api/feishu/records?date=${selectedDate}&person=${selectedPerson}`
-      );
-
-      if (refreshRes.status === 401) {
-        setIsFetchingRecords(false);
-        router.push('/login');
-        return;
-      }
-
-      if (refreshRes.ok) {
-        const data = await refreshRes.json();
-        setExistingRecords(data.records);
-        setExistingTotal(data.total);
-      }
-      setIsFetchingRecords(false);
+      await refreshRecords();
     } catch (err: unknown) {
-      toast.showError(err instanceof Error ? err.message : '删除失败');
+      showError(err instanceof Error ? err.message : '删除失败');
     } finally {
       setIsDeleting(false);
     }
@@ -582,24 +527,7 @@ function WorkloadPageContent() {
             <h2 className="text-xl font-bold text-gray-800">已有记录</h2>
             <button
               onClick={() => {
-                // 手动刷新记录
-                const date = selectedDate;
-                const person = selectedPerson;
-                if (date && person) {
-                  setIsFetchingRecords(true);
-                  fetch(`/api/feishu/records?date=${date}&person=${person}`)
-                    .then(res => res.json())
-                    .then(data => {
-                      setExistingRecords(data.records || []);
-                      setExistingTotal(data.total || 0);
-                    })
-                    .catch(err => {
-                      console.error('Failed to refresh records:', err);
-                    })
-                    .finally(() => {
-                      setIsFetchingRecords(false);
-                    });
-                }
+                void refreshRecords();
               }}
               disabled={isFetchingRecords}
               className={`p-2.5 rounded-xl transition-all duration-200 ${
