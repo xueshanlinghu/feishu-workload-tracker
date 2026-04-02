@@ -5,7 +5,14 @@
 
 'use client';
 
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useMemo,
+  ReactNode,
+} from 'react';
 import Toast, { ToastType } from './Toast';
 
 interface ToastItem {
@@ -60,8 +67,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   }, []);
 
+  const toastContextValue = useMemo(
+    () => ({
+      showToast,
+      showSuccess,
+      showError,
+      showWarning,
+      showInfo,
+    }),
+    [showToast, showSuccess, showError, showWarning, showInfo]
+  );
+
   return (
-    <ToastContext.Provider value={{ showToast, showSuccess, showError, showWarning, showInfo }}>
+    <ToastContext.Provider value={toastContextValue}>
       {children}
 
       {/* Toast容器 - 固定在右下角 */}
