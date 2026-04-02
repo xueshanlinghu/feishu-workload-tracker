@@ -1,12 +1,5 @@
 /**
- * 飞书多维表格(Bitable) API操作
- *
- * 这个文件实现了对飞书多维表格的CRUD操作：
- * 1. 查询记录（支持筛选和分页）
- * 2. 批量创建记录
- * 3. 更新记录
- * 4. 删除记录
- * 5. 获取字段配置
+ * 飞书多维表格(Bitable) API 操作
  */
 
 import { feishuClient } from './client';
@@ -16,69 +9,111 @@ import {
   BitableRecord,
   QueryRecordsResponse,
   CreateRecordsResponse,
+  BatchGetRecordsResponse,
   BitableField,
 } from '@/types/feishu';
 
-/**
- * 查询记录筛选条件
- */
+type UserIdType = 'open_id' | 'union_id' | 'user_id';
+type FilterOperator =
+  | 'is'
+  | 'isNot'
+  | 'contains'
+  | 'doesNotContain'
+  | 'isEmpty'
+  | 'isNotEmpty'
+  | 'isGreater'
+  | 'isGreaterEqual'
+  | 'isLess'
+  | 'isLessEqual';
+
+interface RecordFilterCondition {
+  field_name: string;
+  operator: FilterOperator;
+  value?: string[];
+}
+
+interface RecordFilterGroup {
+  conjunction: 'and' | 'or';
+  conditions?: RecordFilterCondition[];
+  children?: RecordFilterGroup[];
+}
+
 export interface RecordFilter {
-  /**
-   * 筛选条件
-   * 例如：{ "记录日期": "2026-01-08", "记录人员": "user_id" }
-   */
-  filter?: {
-    conjunction?: 'and' | 'or';
-    conditions?: Array<{
-      field_name: string;
-      operator: 'is' | 'isNot' | 'contains' | 'doesNotContain' | 'isEmpty' | 'isNotEmpty';
-      value?: unknown[];
-    }>;
-  };
-  /**
-   * 排序规则
-   */
+  view_id?: string;
+  field_names?: string[];
   sort?: Array<{
     field_name: string;
     desc?: boolean;
   }>;
-  /**
-   * 分页大小（最大500）
-   */
+  filter?: RecordFilterGroup;
+  automatic_fields?: boolean;
   page_size?: number;
-  /**
-   * 分页标记
-   */
   page_token?: string;
+  user_id_type?: UserIdType;
+}
+
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
+
+function buildSearchUrl(
+  appToken: string,
+  tableId: string,
+  pageSize: number,
+  userIdType: UserIdType,
+  pageToken?: string
+): string {
+  const params = new URLSearchParams({
+    page_size: String(pageSize),
+    user_id_type: userIdType,
+  });
+
+  if (pageToken) {
+    params.set('page_token', pageToken);
+  }
+
+  return `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/search?${params.toString()}`;
+}
+
+function toExactDateValue(dateOrTimestamp: string | number): string[] {
+  const timestamp =
+    typeof dateOrTimestamp === 'number'
+      ? dateOrTimestamp
+      : new Date(dateOrTimestamp).getTime();
+
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`无效的日期参数: ${dateOrTimestamp}`);
+  }
+
+  return ['ExactDate', String(timestamp)];
 }
 
 /**
  * 查询多维表格记录
- *
- * 使用POST /open-apis/bitable/v1/apps/:app_token/tables/:table_id/records/search
- *
- * @param appToken - 多维表格app_token
- * @param tableId - 表格table_id
- * @param filter - 筛选和分页条件
- * @returns 查询结果
  */
 export async function queryRecords(
   appToken: string = config.feishu.appToken,
   tableId: string = config.feishu.tableId,
-  filter?: RecordFilter
+  options: RecordFilter = {}
 ): Promise<QueryRecordsResponse> {
   try {
     const token = await getTenantAccessToken();
     const client = feishuClient.withAuth(token);
+    const {
+      page_size = DEFAULT_PAGE_SIZE,
+      page_token,
+      user_id_type = 'open_id',
+      ...body
+    } = options;
+    const safePageSize = Math.min(Math.max(page_size, 1), MAX_PAGE_SIZE);
+    const url = buildSearchUrl(
+      appToken,
+      tableId,
+      safePageSize,
+      user_id_type,
+      page_token
+    );
 
-    const url = `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/search`;
-
-    const response = await client.post<QueryRecordsResponse>(url, {
-      ...filter,
-      page_size: filter?.page_size || 100,
-    });
-
-    return response;
+    return await client.post<QueryRecordsResponse>(url, body);
   } catch (error) {
     console.error('Failed to query records:', error);
     throw new Error('查询记录失败');
@@ -86,78 +121,55 @@ export async function queryRecords(
 }
 
 /**
- * 根据日期和人员查询记录
- *
- * 这是一个便捷方法，用于查询特定日期和人员的记录
- *
- * @param date - 日期字符串 (YYYY-MM-DD)
- * @param personId - 用户ID
- * @returns 查询结果
+ * 按日期和人员在服务端筛选记录。
  */
 export async function queryRecordsByDateAndPerson(
-  date: string,
+  date: string | number,
   personId: string
 ): Promise<BitableRecord[]> {
   try {
     console.log('[Bitable Query] Querying records for date:', date, 'person:', personId);
 
-    // 暂时不使用筛选，获取所有记录
-    // 在客户端进行筛选，避免字段格式问题
-    const filter: RecordFilter = {
-      page_size: 500,
-    };
+    const records: BitableRecord[] = [];
+    let pageToken: string | undefined;
 
-    const response = await queryRecords(
-      config.feishu.appToken,
-      config.feishu.tableId,
-      filter
-    );
+    do {
+      const response = await queryRecords(config.feishu.appToken, config.feishu.tableId, {
+        page_size: MAX_PAGE_SIZE,
+        page_token: pageToken,
+        user_id_type: 'open_id',
+        automatic_fields: true,
+        field_names: [
+          '记录日期',
+          '记录人员',
+          '事项',
+          '人力占用',
+          '人力占用计算',
+          '记录状态',
+        ],
+        filter: {
+          conjunction: 'and',
+          conditions: [
+            {
+              field_name: '记录日期',
+              operator: 'is',
+              value: toExactDateValue(date),
+            },
+            {
+              field_name: '记录人员',
+              operator: 'is',
+              value: [personId],
+            },
+          ],
+        },
+      });
 
-    console.log('[Bitable Query] Got', response.items?.length || 0, 'total records');
+      records.push(...(response.items || []));
+      pageToken = response.has_more ? response.page_token : undefined;
+    } while (pageToken);
 
-    // 打印第一条记录看看字段的格式
-    if (response.items && response.items.length > 0) {
-      console.log('[Bitable Query] Sample record fields:', JSON.stringify(response.items[0].fields, null, 2));
-    }
-
-    // 在客户端进行日期和人员过滤
-    const targetDate = new Date(date);
-    targetDate.setHours(0, 0, 0, 0); // 重置为当天0点
-    const targetTimestamp = targetDate.getTime();
-
-    const filteredRecords = response.items.filter((record: BitableRecord) => {
-      // 检查日期
-      const recordDate = record.fields['记录日期'] as number;
-      if (!recordDate) return false;
-
-      const recordDateObj = new Date(recordDate);
-      recordDateObj.setHours(0, 0, 0, 0);
-      const recordTimestamp = recordDateObj.getTime();
-
-      if (recordTimestamp !== targetTimestamp) return false;
-
-      // 检查人员（支持user_id和open_id两种格式）
-      const recordPerson = record.fields['记录人员'];
-
-      // 人员字段可能是数组格式 [{"id": "ou_xxx"}] 或字符串
-      let personMatches = false;
-
-      if (Array.isArray(recordPerson)) {
-        // 数组格式：检查id或text字段
-        personMatches = recordPerson.some((p: any) => {
-          return p.id === personId || p.text === personId || p.en_name === personId || p.name === personId;
-        });
-      } else if (typeof recordPerson === 'string') {
-        // 字符串格式：直接比较
-        personMatches = recordPerson === personId;
-      }
-
-      return personMatches;
-    });
-
-    console.log('[Bitable Query] After filtering (date + person):', filteredRecords.length, 'records match');
-
-    return filteredRecords;
+    console.log('[Bitable Query] Found', records.length, 'records from server-side filter');
+    return records;
   } catch (error) {
     console.error('Failed to query records by date and person:', error);
     throw new Error('查询指定日期和人员的记录失败');
@@ -165,15 +177,54 @@ export async function queryRecordsByDateAndPerson(
 }
 
 /**
+ * 按记录 ID 批量获取记录。
+ */
+export async function batchGetRecords(
+  recordIds: string[],
+  appToken: string = config.feishu.appToken,
+  tableId: string = config.feishu.tableId,
+  userIdType: UserIdType = 'open_id'
+): Promise<BitableRecord[]> {
+  try {
+    if (recordIds.length === 0) {
+      return [];
+    }
+
+    if (recordIds.length > 100) {
+      throw new Error('一次最多获取100条记录');
+    }
+
+    const token = await getTenantAccessToken();
+    const client = feishuClient.withAuth(token);
+    const url = `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/batch_get`;
+    const response = await client.post<BatchGetRecordsResponse>(url, {
+      record_ids: recordIds,
+      user_id_type: userIdType,
+      automatic_fields: true,
+    });
+
+    return response.records || [];
+  } catch (error) {
+    console.error('Failed to batch get records:', error);
+    throw new Error('批量获取记录失败');
+  }
+}
+
+/**
+ * 获取单条记录。
+ */
+export async function getRecordById(
+  recordId: string,
+  appToken: string = config.feishu.appToken,
+  tableId: string = config.feishu.tableId,
+  userIdType: UserIdType = 'open_id'
+): Promise<BitableRecord | null> {
+  const records = await batchGetRecords([recordId], appToken, tableId, userIdType);
+  return records[0] || null;
+}
+
+/**
  * 批量创建记录
- *
- * 使用POST /open-apis/bitable/v1/apps/:app_token/tables/:table_id/records/batch_create
- * 一次最多创建500条记录
- *
- * @param records - 记录数组
- * @param appToken - 多维表格app_token
- * @param tableId - 表格table_id
- * @returns 创建结果
  */
 export async function createRecords(
   records: BitableRecord[],
@@ -191,15 +242,12 @@ export async function createRecords(
 
     const token = await getTenantAccessToken();
     const client = feishuClient.withAuth(token);
-
     const url = `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/batch_create`;
-
     const response = await client.post<CreateRecordsResponse>(url, {
       records,
     });
 
     console.log(`[Bitable] Created ${records.length} records`);
-
     return response;
   } catch (error) {
     console.error('Failed to create records:', error);
@@ -209,12 +257,6 @@ export async function createRecords(
 
 /**
  * 更新单条记录
- *
- * @param recordId - 记录ID
- * @param fields - 要更新的字段
- * @param appToken - 多维表格app_token
- * @param tableId - 表格table_id
- * @returns 更新后的记录
  */
 export async function updateRecord(
   recordId: string,
@@ -225,9 +267,7 @@ export async function updateRecord(
   try {
     const token = await getTenantAccessToken();
     const client = feishuClient.withAuth(token);
-
     const url = `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/${recordId}`;
-
     const response = await client.put<{ record: BitableRecord }>(url, {
       fields,
     });
@@ -241,10 +281,6 @@ export async function updateRecord(
 
 /**
  * 删除记录
- *
- * @param recordId - 记录ID
- * @param appToken - 多维表格app_token
- * @param tableId - 表格table_id
  */
 export async function deleteRecord(
   recordId: string,
@@ -254,11 +290,9 @@ export async function deleteRecord(
   try {
     const token = await getTenantAccessToken();
     const client = feishuClient.withAuth(token);
-
     const url = `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/${recordId}`;
 
     await client.delete(url);
-
     console.log(`[Bitable] Deleted record ${recordId}`);
   } catch (error) {
     console.error('Failed to delete record:', error);
@@ -268,12 +302,6 @@ export async function deleteRecord(
 
 /**
  * 获取表格所有字段配置
- *
- * 用于获取字段类型、选项等元数据信息
- *
- * @param appToken - 多维表格app_token
- * @param tableId - 表格table_id
- * @returns 字段列表
  */
 export async function getTableFields(
   appToken: string = config.feishu.appToken,
@@ -282,9 +310,7 @@ export async function getTableFields(
   try {
     const token = await getTenantAccessToken();
     const client = feishuClient.withAuth(token);
-
     const url = `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/fields`;
-
     const response = await client.get<{ items: BitableField[] }>(url);
 
     return response.items;
@@ -296,14 +322,10 @@ export async function getTableFields(
 
 /**
  * 从字段配置中提取"事项"字段的选项列表
- *
- * @returns 事项选项数组
  */
 export async function getTaskOptions(): Promise<string[]> {
   try {
     const fields = await getTableFields();
-
-    // 查找"事项"字段
     const taskField = fields.find((field) => field.field_name === '事项');
 
     if (!taskField || !taskField.property) {
@@ -311,8 +333,6 @@ export async function getTaskOptions(): Promise<string[]> {
       return [];
     }
 
-    // 提取选项（具体结构可能需要根据实际API响应调整）
-    // 飞书Bitable的选项通常在 property.options 中
     const options = (taskField.property as { options?: Array<{ name: string }> })
       ?.options;
 

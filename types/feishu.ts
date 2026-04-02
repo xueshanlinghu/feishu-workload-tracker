@@ -79,6 +79,15 @@ export interface CreateRecordsResponse {
 }
 
 /**
+ * 批量获取记录响应
+ */
+export interface BatchGetRecordsResponse {
+  records: BitableRecord[];
+  forbidden_record_ids?: string[];
+  absent_record_ids?: string[];
+}
+
+/**
  * 表格字段定义
  */
 export interface BitableField {

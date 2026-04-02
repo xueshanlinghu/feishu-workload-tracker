@@ -1,236 +1,143 @@
-# 飞书API开发文档参考
+# 飞书 API 开发文档参考
 
-## 官方文档链接
+本文档整理了本项目当前实际依赖的飞书开放平台接口，以及 0.3.6 版本中已经验证通过的关键调用方式。
 
-### 主要文档入口
+## 1. OAuth 与用户登录
 
-1. **飞书开放平台首页**
-   https://open.feishu.cn/
+### 1.1 获取 tenant_access_token
+- 端点: `POST /open-apis/auth/v3/tenant_access_token/internal`
+- 用途: 获取应用级访问令牌，供通讯录和多维表格接口使用
 
-2. **开发文档主页**
-   https://open.feishu.cn/document/
+### 1.2 授权换取 user_access_token
+- 端点: `POST /open-apis/authen/v1/access_token`
+- 用途: OAuth 登录回调后换取用户令牌
 
-3. **服务端API文档**
-   https://open.feishu.cn/document/server-docs/
+### 1.3 获取当前登录用户信息
+- 端点: `GET /open-apis/authen/v1/user_info`
+- 用途: 建立本地 session，保存 `user_id` 与 `open_id`
 
----
+## 2. 通讯录
 
-## 本项目使用的核心API
+### 2.1 按部门获取成员
+- 端点: `GET /open-apis/contact/v3/users/find_by_department`
+- 文档: [find_by_department](https://open.feishu.cn/document/server-docs/contact-v3/user/find_by_department)
+- 用途: 根据 `FEISHU_DEPARTMENT_ID` 拉取部门成员
+- 当前项目约定:
+  - `department_id_type=open_department_id`
+  - `user_id_type=open_id`
+  - 前端和多维表格查询统一使用 `open_id`
 
-### 1. 身份验证（OAuth 2.0）
+## 3. 多维表格(Bitable)
 
-**文档链接：**
-https://open.feishu.cn/document/server-docs/authentication-management/
+### 3.1 查询记录
+- 端点: `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/search`
+- 文档: [search](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/search)
+- 用途: 查询已有记录，支持筛选、排序、分页
 
-#### 1.1 授权URL生成
-- **端点**: `https://open.feishu.cn/open-apis/authen/v1/authorize`
-- **文档**: https://open.feishu.cn/document/server-docs/authentication-management/login-state-authorization/get-authorization-code
+项目内已经验证通过的用法:
+- `user_id_type`、`page_size`、`page_token` 放在 query string 中
+- 请求体中的 `filter` 使用飞书标准格式
+- 人员字段筛选可直接传用户 ID 字符串数组，例如 `["ou_xxx"]`
+- 日期字段筛选使用 `["ExactDate", "时间戳字符串"]`
 
-#### 1.2 获取tenant_access_token（应用访问凭证）
-- **端点**: `POST /open-apis/auth/v3/tenant_access_token/internal`
-- **文档**: https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal
-- **用途**: 调用企业级API（通讯录、Bitable等）
-- **有效期**: 2小时
-
-#### 1.3 获取user_access_token（用户访问凭证）
-- **端点**: `POST /open-apis/authen/v1/access_token`
-- **文档**: https://open.feishu.cn/document/server-docs/authentication-management/access-token/create
-- **用途**: 代表用户身份调用API
-- **有效期**: 2小时（可使用refresh_token刷新）
-
-#### 1.4 获取用户信息
-- **端点**: `GET /open-apis/authen/v1/user_info`
-- **文档**: https://open.feishu.cn/document/server-docs/authentication-management/login-state-authorization/obtain-user-information
-- **需要**: user_access_token
-
----
-
-### 2. 通讯录API（Contact）
-
-**文档链接：**
-https://open.feishu.cn/document/server-docs/contact-v3/
-
-#### 2.1 获取部门用户列表
-- **端点**: `GET /open-apis/contact/v3/users`
-- **文档**: https://open.feishu.cn/document/server-docs/contact-v3/user/list
-- **需要权限**: `contact:user.base:readonly`
-
-#### 2.2 批量获取用户信息
-- **端点**: `POST /open-apis/contact/v3/users/batch_get_id`
-- **文档**: https://open.feishu.cn/document/server-docs/contact-v3/user/batch_get_id
-
----
-
-### 3. 多维表格API（Bitable）
-
-**文档链接：**
-https://open.feishu.cn/document/server-docs/docs/bitable-v1/
-
-#### 3.1 查询记录
-- **端点**: `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/search`
-- **文档**: https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/search
-- **需要权限**: `bitable:app`
-- **支持**: 筛选、排序、分页
-
-#### 3.2 批量创建记录
-- **端点**: `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create`
-- **文档**: https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/batch_create
-- **限制**: 一次最多500条
-
-#### 3.3 获取字段配置
-- **端点**: `GET /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields`
-- **文档**: https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-field/list
-- **用途**: 获取字段类型、选项等信息
-
----
-
-## 常见错误码
-
-### OAuth相关错误
-
-| 错误码 | 含义 | 解决方法 |
-|--------|------|----------|
-| 10000 | 参数错误 | 检查请求参数是否完整 |
-| 10013 | 授权码无效或已过期 | 授权码只能使用一次，重新发起授权 |
-| 20014 | app_access_token无效 | 检查app_id和app_secret是否正确 |
-| 99991668 | redirect_uri不匹配 | 确保redirect_uri与飞书平台配置完全一致 |
-
-### Bitable相关错误
-
-| 错误码 | 含义 | 解决方法 |
-|--------|------|----------|
-| 1254104 | 记录不存在 | 检查record_id是否正确 |
-| 1254045 | 字段类型不匹配 | 检查字段值类型是否符合字段定义 |
-| 403 | 权限不足 | 检查应用是否有bitable:app权限 |
-
----
-
-## 权限配置
-
-### 本项目需要的权限
-
-在飞书开放平台"权限管理"中添加：
-
-1. **`bitable:app`** - 访问多维表格
-   文档: https://open.feishu.cn/document/server-docs/docs/bitable-v1/notification
-
-2. **`contact:user.base:readonly`** - 获取通讯录用户基本信息
-   文档: https://open.feishu.cn/document/server-docs/contact-v3/user/list
-
-3. **`contact:user.employee_id:readonly`** - 获取用户工号
-   文档: https://open.feishu.cn/document/server-docs/contact-v3/user/list
-
-### 权限发布流程
-
-1. 在"权限管理"页面添加权限
-2. 点击"创建版本"
-3. 填写版本说明并提交审核
-4. 审核通过后点击"申请发布"
-5. 管理员批准后权限生效
-
----
-
-## 调试工具
-
-### 1. API Explorer（API调试工具）
-https://open.feishu.cn/api-explorer/
-
-- 可在线测试所有飞书API
-- 自动生成代码示例
-- 查看请求和响应详情
-
-### 2. 开发者后台
-https://open.feishu.cn/app/
-
-- 管理应用
-- 查看API调用日志
-- 配置OAuth回调URL
-
----
-
-## 响应格式
-
-飞书API统一返回格式：
+当前项目核心筛选条件:
 
 ```json
 {
-  "code": 0,           // 0表示成功，非0表示错误
-  "msg": "success",    // 错误描述
-  "data": {            // 业务数据（部分API无此字段）
-    ...
+  "filter": {
+    "conjunction": "and",
+    "conditions": [
+      {
+        "field_name": "记录日期",
+        "operator": "is",
+        "value": ["ExactDate", "1767628800000"]
+      },
+      {
+        "field_name": "记录人员",
+        "operator": "is",
+        "value": ["ou_xxx"]
+      }
+    ]
   }
 }
 ```
 
-**特殊情况：**
-- `tenant_access_token` API: 无 `data` 字段，直接返回 `tenant_access_token` 和 `expire`
-- 部分API: `data` 可能为空或省略
+说明:
+- 这个组合筛选已经在当前生产表结构上实测通过。
+- 旧版本的问题在于只取第一页 500 条并在服务端本地过滤，记录数增长后会漏查。
 
----
+### 3.2 批量获取记录
+- 端点: `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_get`
+- 文档: [batch_get](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/batch_get)
+- 用途: 按 `record_id` 精确读取记录
 
-## 最佳实践
+项目内使用场景:
+- 编辑记录前先读取目标记录
+- 读取目标记录的 `记录日期` 与 `记录人员`
+- 再结合 `search` 做“同人同日”校验
 
-### 1. Token管理
-- ✅ 缓存tenant_access_token（有效期2小时，提前5分钟刷新）
-- ✅ 存储user_access_token和refresh_token在session中
-- ✅ Token过期时自动刷新
+请求体示例:
 
-### 2. 错误处理
-- ✅ 检查 `code` 字段判断请求是否成功
-- ✅ 记录详细错误日志（包括请求参数）
-- ✅ 给用户友好的错误提示
+```json
+{
+  "record_ids": ["recyOaMB2F"],
+  "user_id_type": "open_id",
+  "automatic_fields": true
+}
+```
 
-### 3. 安全性
-- ✅ 使用HTTPS（生产环境必须）
-- ✅ 妥善保管app_secret（不要提交到git）
-- ✅ 验证OAuth state参数防止CSRF
-- ✅ 使用httpOnly cookie存储session
+### 3.3 批量创建记录
+- 端点: `POST /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create`
+- 文档: [batch_create](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/batch_create)
+- 限制: 单次最多 500 条
 
----
+### 3.4 更新记录
+- 端点: `PUT /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}`
+- 文档: [update](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/update)
 
-## 常见问题排查
+### 3.5 删除记录
+- 端点: `DELETE /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}`
+- 文档: [delete](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/delete)
 
-### 问题1: redirect_uri错误
-**症状**: 授权后提示"redirect_uri错误"
+### 3.6 获取字段配置
+- 端点: `GET /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields`
+- 文档: [field list](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-field/list)
+- 用途: 获取字段类型、事项选项等元数据
 
-**排查步骤**:
-1. 检查飞书平台"安全设置 → 重定向URL"配置
-2. 确保 `.env` 中的 `FEISHU_REDIRECT_URI` 与平台配置**完全一致**
-3. 包括协议（http/https）、域名、端口、路径都要匹配
+## 4. 常见错误码
 
-### 问题2: 获取不到用户列表
-**症状**: 调用contact API返回空或报错
+### 4.1 OAuth
 
-**排查步骤**:
-1. 检查是否添加了 `contact:user.base:readonly` 权限
-2. 确认权限版本已发布并生效
-3. 检查tenant_access_token是否有效
+| 错误码 | 含义 | 处理建议 |
+| --- | --- | --- |
+| `10000` | 参数错误 | 检查请求参数是否完整 |
+| `10013` | 授权码无效或已过期 | 重新发起授权 |
+| `20014` | token 无效 | 检查 `app_id` 和 `app_secret` |
+| `99991668` | `redirect_uri` 不匹配 | 确保回调地址与平台配置完全一致 |
 
-### 问题3: 无法写入多维表格
-**症状**: 创建记录失败
+### 4.2 Bitable
 
-**排查步骤**:
-1. 检查是否有 `bitable:app` 权限
-2. 确认 `app_token` 和 `table_id` 正确
-3. 检查字段值类型是否与表格定义匹配
-4. 确认应用有权访问该表格（表格需要授权给应用）
+| 错误码 | 含义 | 处理建议 |
+| --- | --- | --- |
+| `1254018` | `InvalidFilter` | 优先检查字段名、日期 value 格式、人员 ID 类型 |
+| `1254030` | `InvalidPageToken` | 检查 `page_token` 是否与当前 `app_token/table_id` 匹配 |
+| `1254045` | 字段类型不匹配 | 检查人员、日期、数字字段的传值结构 |
+| `1254104` | 记录不存在 | 检查 `record_id` |
 
----
+## 5. 当前项目所需权限
 
-## 更多资源
+- `bitable:app`
+- `contact:user.base:readonly`
+- `contact:user.employee_id:readonly`
 
-- **开发者社区**: https://open.feishu.cn/community/
-- **常见问题**: https://open.feishu.cn/document/home/introduction-to-scope-and-authorization/faq
-- **SDK下载**: https://open.feishu.cn/document/tools-and-resources/sdk
-- **更新日志**: https://open.feishu.cn/document/changelog
+如果需要读取更完整的人员信息，还需要根据返回字段补充通讯录相关权限。
 
----
+## 6. 0.3.6 实现说明
 
-## 本项目技术栈文档
+0.3.6 版本起，项目中的“已有记录查询 / 创建前校验 / 编辑前校验”统一改为:
 
-- **Next.js**: https://nextjs.org/docs
-- **React**: https://react.dev/
-- **TypeScript**: https://www.typescriptlang.org/docs/
-- **Tailwind CSS**: https://tailwindcss.com/docs
-- **iron-session**: https://github.com/vvo/iron-session
-- **Axios**: https://axios-http.com/docs/intro
+1. 使用 `records/search` 做服务端筛选
+2. 使用 `records/batch_get` 按 `record_id` 精确读取目标记录
+3. 不再依赖“全表拉取后本地过滤”的旧实现
+
+这样可以避免记录总数超过 500 条后出现漏查和错误校验。
