@@ -13,6 +13,12 @@ import {
   updateRecord,
   getRecordById,
 } from '@/lib/feishu/bitable';
+import {
+  fromWorkloadUnits,
+  isWorkloadOverLimit,
+  sumWorkloadUnits,
+  toWorkloadUnits,
+} from '@/lib/workload';
 import { isSessionValid, getCurrentUser } from '@/lib/session';
 import { BitableRecord } from '@/types/feishu';
 
@@ -25,7 +31,7 @@ function getRecordWorkload(record: BitableRecord): number {
     workload = workloadInt / 10;
   }
 
-  return workload;
+  return fromWorkloadUnits(toWorkloadUnits(workload));
 }
 
 function getRecordPersonId(record: BitableRecord): string | null {
@@ -84,7 +90,9 @@ export async function GET(request: NextRequest) {
     }
 
     const records = await queryRecordsByDateAndPerson(date, personId);
-    const totalWorkload = records.reduce((sum, record) => sum + getRecordWorkload(record), 0);
+    const totalWorkload = fromWorkloadUnits(
+      sumWorkloadUnits(records.map((record) => getRecordWorkload(record)))
+    );
     const formattedRecords = records.map(formatRecord);
 
     console.log(`[Records API] Found ${records.length} records for date ${date}, person ${personId}`);
@@ -151,13 +159,18 @@ export async function POST(request: NextRequest) {
     }
 
     const existingRecords = await queryRecordsByDateAndPerson(date, personId);
-    const existingTotal = existingRecords.reduce((sum, record) => sum + getRecordWorkload(record), 0);
-    const newTotal = records.reduce((sum: number, record: { workload: number }) => {
-      return sum + record.workload;
-    }, 0);
-    const finalTotal = existingTotal + newTotal;
+    const existingTotalUnits = sumWorkloadUnits(
+      existingRecords.map((record) => getRecordWorkload(record))
+    );
+    const newTotalUnits = sumWorkloadUnits(
+      records.map((record: { workload: number }) => record.workload)
+    );
+    const finalTotalUnits = existingTotalUnits + newTotalUnits;
+    const existingTotal = fromWorkloadUnits(existingTotalUnits);
+    const newTotal = fromWorkloadUnits(newTotalUnits);
+    const finalTotal = fromWorkloadUnits(finalTotalUnits);
 
-    if (finalTotal > 1.0) {
+    if (isWorkloadOverLimit(finalTotalUnits)) {
       return NextResponse.json(
         {
           error: '总人力占用超出限制',
@@ -173,7 +186,7 @@ export async function POST(request: NextRequest) {
         记录日期: dateTimestamp,
         记录人员: [{ id: personId }],
         事项: record.task,
-        人力占用: Math.round(record.workload * 10),
+        人力占用: toWorkloadUnits(record.workload),
         记录状态: '未发周报',
         创建人: [{ id: currentUser.openId }],
       },
@@ -286,9 +299,15 @@ export async function PATCH(request: NextRequest) {
 
     console.log('[Records API PATCH] personRecords count:', personRecords.length);
 
-    const existingTotal = personRecords
-      .filter((record) => record.record_id !== recordId)
-      .reduce((sum, record) => sum + getRecordWorkload(record), 0);
+    const existingTotalUnits = sumWorkloadUnits(
+      personRecords
+        .filter((record) => record.record_id !== recordId)
+        .map((record) => getRecordWorkload(record))
+    );
+    const newWorkloadUnits = toWorkloadUnits(workload);
+    const updatedTotalUnits = existingTotalUnits + newWorkloadUnits;
+    const existingTotal = fromWorkloadUnits(existingTotalUnits);
+    const updatedTotal = fromWorkloadUnits(updatedTotalUnits);
 
     console.log(
       '[Records API PATCH] existingTotal (excluding current):',
@@ -296,21 +315,21 @@ export async function PATCH(request: NextRequest) {
       'newWorkload:',
       workload,
       'total:',
-      existingTotal + workload
+      updatedTotal
     );
 
-    if (existingTotal + workload > 1.0) {
+    if (isWorkloadOverLimit(updatedTotalUnits)) {
       return NextResponse.json(
         {
           error: '总人力占用超出限制',
-          detail: `该日期其他记录占用 ${existingTotal.toFixed(1)}，更新后将达到 ${(existingTotal + workload).toFixed(1)} > 1.0`,
+          detail: `该日期其他记录占用 ${existingTotal.toFixed(1)}，更新后将达到 ${updatedTotal.toFixed(1)} > 1.0`,
         },
         { status: 400 }
       );
     }
 
     const updated = await updateRecord(recordId, {
-      人力占用: Math.round(workload * 10),
+      人力占用: newWorkloadUnits,
     });
 
     return NextResponse.json({

@@ -19,6 +19,14 @@ import { ToastProvider, useToast } from './ToastProvider';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import CustomDatePicker from './CustomDatePicker';
 import CustomSelect, { SelectOption } from './CustomSelect';
+import {
+  fromWorkloadUnits,
+  isWorkloadOverLimit,
+  MAX_WORKLOAD,
+  normalizeWorkload,
+  sumWorkloadUnits,
+  toWorkloadUnits,
+} from '@/lib/workload';
 import packageJson from '../../package.json';
 
 const SESSION_HEARTBEAT_INTERVAL_MS = 45 * 60 * 1000;
@@ -174,8 +182,13 @@ function WorkloadPageContent() {
 
       if (res.ok) {
         const data = await res.json();
-        setExistingRecords(data.records);
-        setExistingTotal(data.total);
+        setExistingRecords(
+          data.records.map((record: Record) => ({
+            ...record,
+            workload: normalizeWorkload(record.workload),
+          }))
+        );
+        setExistingTotal(normalizeWorkload(data.total));
       } else {
         setExistingRecords([]);
         setExistingTotal(0);
@@ -247,13 +260,20 @@ function WorkloadPageContent() {
   // 更新记录
   const updateRecord = (index: number, field: 'task' | 'workload', value: string | number) => {
     const updated = [...newRecords];
-    updated[index] = { ...updated[index], [field]: value };
+    updated[index] = {
+      ...updated[index],
+      [field]: field === 'workload' ? normalizeWorkload(value as number) : value,
+    };
     setNewRecords(updated);
   };
 
   // 计算新增总计
-  const newTotal = newRecords.reduce((sum, r) => sum + r.workload, 0);
-  const finalTotal = existingTotal + newTotal;
+  const existingTotalUnits = toWorkloadUnits(existingTotal);
+  const newTotalUnits = sumWorkloadUnits(newRecords.map((record) => record.workload));
+  const finalTotalUnits = existingTotalUnits + newTotalUnits;
+  const newTotal = fromWorkloadUnits(newTotalUnits);
+  const finalTotal = fromWorkloadUnits(finalTotalUnits);
+  const isOverLimit = isWorkloadOverLimit(finalTotalUnits);
 
   // 前端验证：检查是否有无效的记录（事项为空或人力为0）
   const hasInvalidRecords = newRecords.some(r => !r.task || r.workload === 0);
@@ -288,7 +308,7 @@ function WorkloadPageContent() {
         return;
       }
 
-      if (finalTotal > 1.0) {
+      if (isOverLimit) {
         showError('总人力占用不能超过1.0');
         return;
       }
@@ -693,13 +713,13 @@ function WorkloadPageContent() {
                   </div>
                   <div className="flex justify-between items-center pt-3 border-t-2 border-blue-200">
                     <span className="text-lg font-bold text-gray-900">总计：</span>
-                    <span className={`text-2xl font-bold ${finalTotal > 1.0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {finalTotal.toFixed(1)} / 1.0
+                    <span className={`text-2xl font-bold ${isOverLimit ? 'text-red-600' : 'text-green-600'}`}>
+                      {finalTotal.toFixed(1)} / {MAX_WORKLOAD.toFixed(1)}
                     </span>
                   </div>
                 </div>
 
-                {finalTotal > 1.0 && (
+                {isOverLimit && (
                   <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl flex items-center">
                     <svg className="w-5 h-5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -719,7 +739,7 @@ function WorkloadPageContent() {
 
                 <button
                   onClick={handleSubmit}
-                  disabled={isSubmitting || isFetchingRecords || finalTotal > 1.0 || newRecords.length === 0 || hasInvalidRecords}
+                  disabled={isSubmitting || isFetchingRecords || isOverLimit || newRecords.length === 0 || hasInvalidRecords}
                   className="w-full mt-6 px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl hover:from-blue-700 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:from-blue-600 disabled:hover:to-blue-500 font-semibold text-lg shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-[1.02]"
                 >
                   {isSubmitting ? '提交中...' : '提交记录'}
