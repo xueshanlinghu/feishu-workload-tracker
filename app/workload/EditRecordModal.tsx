@@ -12,6 +12,13 @@
 
 import { useState, useEffect } from 'react';
 import WorkloadSelector from './WorkloadSelector';
+import {
+  fromWorkloadUnits,
+  isWorkloadOverLimit,
+  MAX_WORKLOAD,
+  normalizeWorkload,
+  toWorkloadUnits,
+} from '@/lib/workload';
 
 interface EditRecordModalProps {
   isOpen: boolean;
@@ -40,15 +47,21 @@ export default function EditRecordModal({
   // 当弹窗打开或记录变化时，重置workload为记录的原始值
   useEffect(() => {
     if (isOpen && record) {
-      setWorkload(record.workload);
+      setWorkload(normalizeWorkload(record.workload));
     }
   }, [isOpen, record]);
 
   // 计算修改后的总人力
   // 总人力 = 当前总人力 - 原记录人力 + 新人力
-  const newTotal = record ? currentTotal - record.workload + workload : currentTotal;
-  const isOverLimit = newTotal > 1.0;
-  const workloadChange = record ? workload - record.workload : 0;
+  const currentTotalUnits = toWorkloadUnits(currentTotal);
+  const currentRecordUnits = record ? toWorkloadUnits(record.workload) : 0;
+  const workloadUnits = toWorkloadUnits(workload);
+  const newTotalUnits = record ? currentTotalUnits - currentRecordUnits + workloadUnits : currentTotalUnits;
+  const newTotal = fromWorkloadUnits(newTotalUnits);
+  const isOverLimit = isWorkloadOverLimit(newTotalUnits);
+  const workloadChange = record
+    ? fromWorkloadUnits(workloadUnits - currentRecordUnits)
+    : 0;
 
   // 提交更新
   const handleSubmit = async () => {
@@ -62,7 +75,7 @@ export default function EditRecordModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           recordId: record.id,
-          workload: workload,
+          workload: normalizeWorkload(workload),
         }),
       });
 
@@ -160,7 +173,7 @@ export default function EditRecordModal({
           <div className="flex justify-between items-center pt-2 border-t border-gray-200">
             <span className="text-sm font-medium text-gray-700">修改后总人力：</span>
             <span className={`font-bold text-lg ${isOverLimit ? 'text-red-600' : 'text-green-600'}`}>
-              {newTotal.toFixed(1)} / 1.0
+              {newTotal.toFixed(1)} / {MAX_WORKLOAD.toFixed(1)}
             </span>
           </div>
 
@@ -173,7 +186,7 @@ export default function EditRecordModal({
               <div>
                 <p className="text-sm font-medium text-red-800">总人力超过限制</p>
                 <p className="text-xs text-red-600 mt-1">
-                  该日期总人力将达到 {newTotal.toFixed(1)}，超过 1.0 的限制，无法保存
+                  该日期总人力将达到 {newTotal.toFixed(1)}，超过 {MAX_WORKLOAD.toFixed(1)} 的限制，无法保存
                 </p>
               </div>
             </div>
